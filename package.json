@@ -1,23 +1,27 @@
 {
   "name": "pairing-server",
   "version": "1.0.0",
-  "description": "Telmass WhatsApp Pairing Server",
+  "description": "Telmass WhatsApp Pairing Server (session ID generator)",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "Telmass",
   "license": "ISC",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "@hapi/boom": "^10.0.1",
-    "baileys": "github:WhiskeySockets/Baileys",
+    "baileys": "7.0.0-rc14",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "fs-extra": "^11.3.5",
     "node-cache": "^5.1.2",
-    "pino": "^10.3.1"
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4"
   }
 }
