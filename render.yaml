@@ -1,14 +1,23 @@
 services:
   - type: web
-    name: telmas-pairing
-    env: node
+    name: telmas-bot
+    runtime: node
     plan: free
-    buildCommand: "npm ci"
-    startCommand: "npm start"
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
     envVars:
       - key: NODE_VERSION
-        value: "20.x"
-      - key: SESSION_GENERATOR_ONLY
+        value: "22"
+      # Paste the TELMAS~... ID from the pairing site in the Render dashboard (kept out of git).
+      # The free plan's disk is wiped on every restart, so the bot re-applies this ID each time.
+      - key: SESSION_ID
+        sync: false
+      # The free plan sleeps a service after ~15 min without traffic. The bot pings its own public
+      # /health (Render sets RENDER_EXTERNAL_URL) every 10 min to stay awake, on top of any
+      # external monitor (UptimeRobot / cron-job.org on /health every 5 min) you add.
+      - key: KEEP_ALIVE
         value: "true"
-      - key: PORT
-        value: "10000"
+      - key: KEEP_ALIVE_MINUTES
+        value: "10"
