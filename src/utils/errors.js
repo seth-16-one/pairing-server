@@ -22,13 +22,21 @@ function sendError(res, error, fallbackCode = undefined) {
     const statusCode = error.statusCode || error.status || 500;
     const code = error.code || fallbackCode || errorCodeFromStatus(statusCode);
 
-    return res.status(statusCode).json({
+    const body = {
         success: false,
         error: {
             code,
             message: error.message || "Unexpected error"
         }
-    });
+    };
+
+    const retryAfter = error.details?.retryAfter;
+    if (Number.isFinite(retryAfter)) {
+        body.error.retryAfter = retryAfter;
+        res.set("Retry-After", String(retryAfter));
+    }
+
+    return res.status(statusCode).json(body);
 }
 
 module.exports = {
