@@ -13,7 +13,7 @@ router.post("/", async (req, res) => {
             throw createError("INVALID_PHONE", "A valid phone number with country code is required", 400);
         }
 
-        const pairing = await SocketManager.createPairing(phone);
+        const pairing = await SocketManager.createPairing(phone, req.ip);
 
         return res.json({
             success: true,
