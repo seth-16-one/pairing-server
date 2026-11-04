@@ -1,21 +1,28 @@
 # Telmass WhatsApp Pairing Server
 
-Backend service for generating WhatsApp companion-device pairing codes with Baileys v7. The API is designed for a React Native client: all responses are JSON, CORS is enabled, sessions are tracked by `sessionId`, and sockets/session files are cleaned up automatically.
+Backend service for linking WhatsApp companion devices with Baileys v7 and turning the result into a `SESSION_ID` for your bot. Two parts share one engine:
+
+- **A website** (open the server URL in a browser) with two ways to pair: **Pair code** and **QR code**. When the account is linked, the page shows the `SESSION_ID` once and the same ID is sent to the user's own WhatsApp chat.
+- **The JSON API** used by the React Native app (`/pair`, `/status`, `/bots`, `/logout`), unchanged and now able to hand over the `SESSION_ID` too.
+
+All responses are JSON, CORS is enabled, attempts are tracked by a random secret id, and sockets/session files are cleaned up automatically.
 
 ## Features
 
-- WhatsApp pairing code generation with Baileys.
-- One active pairing session per phone number.
-- Session status polling by `sessionId`.
-- Explicit disconnect endpoint.
-- Active bot/session listing.
+- Pair code and QR code pairing (website and API).
+- `TELMAS~<base64>` SESSION_ID built from the linked credentials, shown once and sent to the user's own chat.
+- Reconnects automatically after the "restart required" WhatsApp sends once the account is linked.
+- A new code can be requested at any time with the same number; a wrong or abandoned attempt never blocks it.
+- Abuse limits: per-IP hourly cap, cap on pairings in progress, per-number cooldown.
+- Session status polling by a random secret id.
+- Explicit disconnect endpoint and active listing.
 - JSON-only error responses.
 - Automatic timeout and filesystem cleanup.
 - Development-only verbose logging.
 
 ## Requirements
 
-- Node.js 20+ recommended.
+- Node.js 20 or newer.
 - npm.
 - Network access to WhatsApp Web endpoints.
 
@@ -55,13 +62,36 @@ http://localhost:3000
 | --- | ---: | --- |
 | `PORT` | `3000` | HTTP server port. |
 | `NODE_ENV` | unset | Set to `development` for verbose development logs. |
-| `PAIRING_SESSION_TIMEOUT_MS` | `120000` | Time before an unpaired session expires. |
-| `SOCKET_READY_TIMEOUT_MS` | `30000` | Max wait before requesting the pairing code. |
+| `BOT_NAME` | `Telmas` | Name shown in the WhatsApp message that carries the SESSION_ID. |
+| `TRUST_PROXY` | `1` | Proxies in front of the server (so the visitor's IP is used for limits). `0` if exposed directly. |
+| `CORS_ORIGINS` | open | Comma-separated allowed origins. |
+| `MAX_PAIRINGS` | `5` | Pairings in progress at once (each holds a WhatsApp socket). |
+| `PAIRING_MAX_PER_IP_HOUR` | `10` | Requests per IP per hour. |
+| `PAIRING_COOLDOWN_MS` | `5000` | Minimum gap between requests for the same number / same visitor's QR. |
+| `PAIRING_REPLACE_AFTER_MS` | `60000` | Another IP may replace a waiting attempt for the same number only after this long. |
+| `PAIRING_SESSION_TIMEOUT_MS` | `600000` | Time before an unfinished code pairing expires. |
+| `QR_SESSION_TIMEOUT_MS` | `180000` | Time before an unscanned QR expires. |
+| `SESSION_HISTORY_TTL_MS` | `900000` | How long finished attempts stay pollable (as `expired`/`closed`). |
 | `WA_CONNECT_TIMEOUT_MS` | `30000` | Baileys websocket connect timeout. |
 | `WA_QUERY_TIMEOUT_MS` | `60000` | Baileys query timeout. |
 | `WA_QR_TIMEOUT_MS` | `60000` | Baileys QR payload timeout. |
-| `SESSION_HISTORY_TTL_MS` | `900000` | How long closed/expired session metadata remains pollable. |
 | `BAILEYS_LOG_LEVEL` | `debug` | Used only when `NODE_ENV=development`. |
+
+## Website and generator API
+
+Open the server URL in a browser. Both tabs end the same way: the account is linked, the page shows the `SESSION_ID` once, and the same ID arrives in the user's own WhatsApp chat. Set it as `SESSION_ID` on the bot host (or put it in `session.txt` next to the bot's `index.js`).
+
+```http
+POST /api/request-code      { "dial": "254", "number": "712345678" }
+POST /api/request-qr
+GET  /api/session-status/:token
+```
+
+- `request-code` returns `{ success, code, token, expiresAt }`. A `number` starting with `+` is used as typed; `{ "phone": "2547xxxxxxxx" }` is also accepted.
+- `request-qr` returns `{ success, token, expiresAt, expiresIn }`. The QR image arrives through the status poll.
+- `session-status` answers `{ success, status }`: `waiting` (QR attempts also carry `qr`, a data URL), `ready` (carries `session`, the SESSION_ID, **once**), `delivered`, `expired`, `closed` or `error`.
+- Errors use the standard format. Rate limits answer `429` with `error.retryAfter` (seconds) where it applies.
+- A browser opening `GET /` gets the website; API clients (`Accept: application/json` or `*/*`) still get the JSON health response.
 
 ## API Overview
 
@@ -132,7 +162,8 @@ Notes:
 - `qr` is returned only when Baileys exposes a QR payload.
 - `pairingCode` is the raw code from Baileys.
 - `pairingLink` uses a human-readable grouped code.
-- Re-requesting pairing for the same phone replaces the previous active session.
+- Re-requesting pairing for the same phone replaces the previous active session (from the same IP, or after `PAIRING_REPLACE_AFTER_MS` from another one).
+- When the account is linked, the status response carries the SESSION_ID once, in `session`.
 
 Possible errors:
 
@@ -174,7 +205,7 @@ Session statuses:
 | Status | Meaning |
 | --- | --- |
 | `waiting` | Pairing code was issued and the user has not connected yet. |
-| `connected` | WhatsApp pairing completed and Baileys opened the connection. |
+| `connected` | WhatsApp pairing completed; the SESSION_ID is in `session` on the first read. |
 | `expired` | The pairing session timed out. |
 | `closed` | The session was disconnected or cleaned up. |
 
@@ -283,7 +314,7 @@ Response `200`:
 2. Show `pairingCode` to the customer.
 3. Store `sessionId` locally while pairing is in progress.
 4. Poll `GET /pair/:sessionId` every few seconds.
-5. Stop polling when status becomes `connected`, `expired`, or `closed`.
+5. Stop polling when status becomes `connected` (read `session`, the SESSION_ID, now: it is handed over once), `expired`, or `closed`.
 6. Call `DELETE /pair/:sessionId` when the user cancels pairing.
 
 ## Project Structure
@@ -294,12 +325,17 @@ src/
   index.js
   routes/
     bots.js
+    generator.js
     logout.js
     pair.js
     status.js
   services/
     SocketManager.js
     pairingSessionManager.js
+    sessionCodec.js
+  web/
+    index.html
+    countries.js
   utils/
     errors.js
     format.js
@@ -314,7 +350,8 @@ src/
 - Do not commit `.env`.
 - Do not commit `src/sessions/*`; it contains WhatsApp credentials.
 - Put the service behind HTTPS in production.
-- Restrict CORS origins before public deployment if the API is not meant to be public.
+- Restrict CORS origins (`CORS_ORIGINS`) before public deployment if the API is not meant to be public.
+- The SESSION_ID works as a WhatsApp login: it is shown once, never logged, and never kept after the attempt is cleaned up.
 - Run with a process manager such as PM2, Docker, or systemd.
 - Monitor memory and active session counts through `GET /status`.
 
@@ -323,6 +360,8 @@ src/
 ```bash
 node --check src/index.js
 node --check src/app.js
+node --check src/routes/generator.js
+npm test
 node --check src/routes/pair.js
 node --check src/routes/status.js
 node --check src/routes/bots.js
